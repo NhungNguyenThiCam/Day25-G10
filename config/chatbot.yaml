@@ -1,0 +1,21 @@
+provider: openai
+model: gpt-4o-mini
+temperature: 0.2
+top_k: 4
+
+data_path: data/vietnamairlines_public_policies.json
+
+langsmith:
+  project: vna-chatbot
+  dataset_name: vna-testset
+  input_key: question
+  output_key: answer
+  reference_key: reference
+  contexts_key: contexts
+
+ragas:
+  enabled: true
+  metrics:
+    - faithfulness
+    - answer_relevancy
+    - context_precision

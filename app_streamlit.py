@@ -74,15 +74,8 @@ def main() -> None:
     svg = load_svg("airplane.svg")
     render_header(svg)
 
-    st.sidebar.header("Settings & Branding")
-    logo_file = st.sidebar.file_uploader("Upload a logo (optional)", type=["png", "jpg", "jpeg", "svg"])
-    logo_url = st.sidebar.text_input("Or enter a logo/image URL (optional)")
-    st.sidebar.markdown("---")
-    cfg_path = st.sidebar.text_input("Config path", value=str(DEFAULT_CONFIG))
-    st.sidebar.markdown("To avoid LangSmith tracing issues, set LANGSMITH_TRACING=false in your environment.")
-
     try:
-        config = load_config(Path(cfg_path))
+        config = load_config(DEFAULT_CONFIG)
     except Exception:
         config = load_config()
 
@@ -110,8 +103,7 @@ def main() -> None:
                     sources = []
 
             st.session_state.history.append({"role": "assistant", "text": answer, "sources": sources})
-            st.session_state.input_box = ""
-            st.experimental_rerun()
+            st.rerun()
 
     with right:
         st.markdown("**Thông tin**")
