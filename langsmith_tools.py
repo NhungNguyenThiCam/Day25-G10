@@ -30,9 +30,11 @@ def sync_dataset(dataset_name: str, input_path: Path, config_path: Path) -> None
     load_dotenv()
     config = load_config(config_path)
     client = Client()
-    if client.has_dataset(dataset_name):
+    # Read existing dataset if present, otherwise create it. Some Client
+    # implementations expose different helpers, so use a try/except fallback
+    try:
         dataset = client.read_dataset(dataset_name=dataset_name)
-    else:
+    except Exception:
         dataset = client.create_dataset(dataset_name=dataset_name, description="Vietnam Airlines chatbot testset")
 
     examples = read_jsonl(input_path)
@@ -162,12 +164,53 @@ def run_ragas_eval(dataset_path: Path, config_path: Path) -> None:
             "ragas/datasets chưa được cài. Hãy chạy pip install -r requirements.txt rồi thử lại."
         ) from exc
 
-    dataset = Dataset.from_list(prepared_rows)
-    result = evaluate(
-        dataset,
-        metrics=[faithfulness, answer_relevancy, context_precision],
-    )
-    print(result)
+    try:
+        dataset = Dataset.from_list(prepared_rows)
+        result = evaluate(
+            dataset,
+            metrics=[faithfulness, answer_relevancy, context_precision],
+        )
+        print(result)
+    except Exception as exc:  # fallback simple scoring if ragas raises runtime errors
+        print(f"RAGAS evaluation failed: {exc}\nFalling back to lightweight local scoring...")
+
+        # Lightweight fallback metrics per-example
+        scores = []
+        for row in prepared_rows:
+            answer = row.get("answer", "") or ""
+            gt = (row.get("ground_truth") or "").lower()
+            contexts = " ".join(row.get("contexts") or [])
+
+            gt_tokens = set(gt.split())
+            ans_tokens = set(answer.lower().split())
+            ctx_tokens = set(contexts.lower().split())
+
+            faithfulness = (len(gt_tokens & ans_tokens) / max(1, len(gt_tokens))) if gt_tokens else 0.0
+            answer_relevancy_score = (len(ans_tokens & gt_tokens) / max(1, len(ans_tokens))) if ans_tokens else 0.0
+            context_precision_score = (len(ans_tokens & ctx_tokens) / max(1, len(ans_tokens))) if ans_tokens else 0.0
+
+            scores.append(
+                {
+                    "question": row.get("question"),
+                    "faithfulness": round(faithfulness, 3),
+                    "answer_relevancy": round(answer_relevancy_score, 3),
+                    "context_precision": round(context_precision_score, 3),
+                }
+            )
+
+        # Aggregate
+        avg = {"faithfulness": 0.0, "answer_relevancy": 0.0, "context_precision": 0.0}
+        for s in scores:
+            avg["faithfulness"] += s["faithfulness"]
+            avg["answer_relevancy"] += s["answer_relevancy"]
+            avg["context_precision"] += s["context_precision"]
+        n = len(scores) or 1
+        avg = {k: round(v / n, 3) for k, v in avg.items()}
+
+        print("Fallback per-example scores:")
+        for s in scores:
+            print(s)
+        print("Fallback aggregated scores:", avg)
 
 
 def main() -> None:
