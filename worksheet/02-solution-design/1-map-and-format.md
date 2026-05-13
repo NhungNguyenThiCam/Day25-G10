@@ -227,6 +227,87 @@ Link chi tiết:
 - **Demo**: `demo.md` chứa trọn bộ ASCII System Diagram, Capacity Table, Fallback chains và Observability stack.
 - **Trạng thái**: Xong
 
+**Khung xử lý Kiến trúc & Luồng Dữ liệu Backend (ASCII Architecture Diagram)**:
+```text
+                  ┌────────────────────────────────────────┐
+                  │          USER (Web / App / Kiosk)      │
+                  └───────────────────┬────────────────────┘
+                                      │ HTTPS + Hashed UserID
+                                      ▼
+             ┌──────────────────────────────────────────────────┐
+             │  API GATEWAY (Cloudflare Workers / Kong Gateway) │
+             │  - Rate limit: 20 requests / min / user          │
+             │  - WAF & DDoS Shield                             │
+             │  - Push async raw request log ──► [ DATADOG ]    │
+             └────────────────────────┬─────────────────────────┘
+                                      │
+                                      ▼
+             ┌──────────────────────────────────────────────────┐
+             │  INTENT CLASSIFIER (Fast Lightweight LLM / Rule) │
+             │  - Latency p50: ~150ms                           │
+             │  - Phân loại: Normal / PNR-Required / Red-Flag   │
+             └──────┬─────────────────┬──────────────────┬──────┘
+                    │                 │                  │
+         ┌──────────┴──────┐   ┌──────┴──────────┐   ┌───┴──────────────┐
+         ▼                 ▼   ▼                 ▼   ▼                  ▼
+     [ Normal ]     [ PNR-Required ]       [ Out-of-Scope ]    [ Red-Flag / Emergency ]
+         │                 │                     │                      │
+         │                 ▼                     ▼                      ▼
+         │          ┌──────────────┐      ┌──────────────┐       ┌──────────────────────┐
+         │          │ PSS CORE DB  │      │ STATIC REFUSE│       │ COUNSELOR ESCALATION │
+         │          │ Tra cứu vé   │      │ Lịch sự ngắt │       │ - Cảnh báo giao diện │
+         │          │ Timeout < 1s │      │ luồng RAG    │       │ - Line CSKH: 1800-xxx│
+         │          └──────┬───────┘      └──────────────┘       │ - Báo động Y tế Sân  │
+         │                 │                                     │   bay < 1 giây       │
+         │                 ▼                                     └──────────┬───────────┘
+         │          ┌──────────────┐                                        │
+         │          │ REDIS CACHE  │◄────── Cache Hit (TTL 24h)             │
+         │          │ TTL 24h      │                                        │
+         │          └──────┬───────┘                                        │
+         │                 │ Cache Miss                                     │
+         ▼                 ▼                                                │
+    ┌──────────────────────────────┐                                        │
+    │ VECTOR DB (Pinecone / Milvus)│                                        │
+    │ - Embedding Policy Matrix    │                                        │
+    │ - Similarity Score >= 0.78   │                                        │
+    └──────────────┬───────────────┘                                        │
+                   │                                                        │
+     Similarity < 0.78 (Low Confidence) ──► [ STATIC REFUSE: NO-SOURCE ]    │
+                   │                                                        │
+                   ▼                                                        │
+    ┌──────────────────────────────────────────────────┐                    │
+    │ LLM GENERATION SERVICE (Anthropic Claude 3.5)    │                    │
+    │ - Inject RAG context nguyên văn                  │                    │
+    │ - Cấm tuyệt đối hứa hẹn ngoại lệ                 │                    │
+    │ - Tự động đính kèm liên kết trích dẫn (Citation) │                    │
+    └──────────────────────┬───────────────────────────┘                    │
+                           │                                                │
+                           ▼                                                │
+    ┌──────────────────────────────────────────────────┐                    │
+    │ OUTPUT FILTER & COMPLIANCE LAYER                 │                    │
+    │ - Strip PII (Che giấu số hộ chiếu, CCCD, SĐT)    │                    │
+    │ - Gán nhãn tin cậy:                              │                    │
+    │   • Score >= 0.85 ──► ✓ Đã kiểm chứng             │                    │
+    │   • Score < 0.85  ──► ⚠ Cảnh báo / Ngắt luồng    │                    │
+    └──────────────────────┬───────────────────────────┘                    │
+                           │                                                │
+             ┌─────────────┴─────────────┐                                  │
+             ▼                           ▼                                  │
+      [ Send to UI ]              [ OBSERVABILITY ]                         │
+                                  - Datadog Log                             │
+                                  - Prometheus Metric                       │
+                                  - Kafka Audit Queue ◄─────────────────────┘
+                                         │
+                                         ▼
+                                  [ MONITORING STACK ]
+                                  • Legal Storage (Lưu trữ 7 năm)
+```
+
+**Cơ chế Luồng Xử lý Dự phòng (Fallback Pipelines)**:
+- **Fallback 1 (PSS DB Quá tải / Sập)**: Bỏ qua truy vấn DB lõi trực tiếp, đọc bộ nhớ đệm **Redis Cache** và chèn dòng thông báo tĩnh: *"Hệ thống lõi đang bảo trì. Thông tin dựa trên chính sách chung gần nhất."*
+- **Fallback 2 (Thiếu tài liệu RAG $\to$ Similarity < 0.78)**: Tự động ngắt kết nối với LLM Service để tránh sinh ảo giác, trả về câu tĩnh: *"Hệ thống chưa tìm thấy điều khoản cụ thể. Vui lòng tham khảo trang Fare Rules hoặc liên hệ nhân viên trực ban."*
+- **Fallback 3 (Giám sát Pháp lý 7 năm)**: Mọi phiên trò chuyện dán nhãn `Red-Flag` (leo thang pháp lý/đe dọa kiện tụng) đều được mã hóa PII tự động và đẩy vào **Immutable Storage** kéo dài 7 năm.
+
 Link chi tiết:
 
 - `artifact/3-architecture/card.md`
