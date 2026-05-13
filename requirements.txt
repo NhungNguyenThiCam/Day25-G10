@@ -1,2 +1,10 @@
 beautifulsoup4
 lxml
+requests
+urllib3
+openai
+langsmith
+python-dotenv
+PyYAML
+datasets
+ragas
